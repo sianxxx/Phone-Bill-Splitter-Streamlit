@@ -1,5 +1,4 @@
-google_api_python_client==2.158.0
-google_auth_oauthlib==1.2.1
+streamlit_oauth
 pandas==2.2.3
 pdfplumber==0.11.5
 streamlit==1.41.1
