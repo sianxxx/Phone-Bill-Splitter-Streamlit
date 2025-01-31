@@ -87,7 +87,7 @@ def login_button():
     if st.button("Sign in with Google"):
         flow = create_google_oauth_flow()
         authorization_url, state = flow.authorization_url(
-            access_type='offline',
+            access_type='online',
             include_granted_scopes='true'
         )
         st.session_state.oauth_state = state
