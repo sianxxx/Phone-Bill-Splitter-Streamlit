@@ -3,6 +3,7 @@ import pandas as pd
 import pdfplumber
 import re
 from io import StringIO
+import io
 import json
 import base64
 import os
@@ -96,11 +97,17 @@ def process_bill(full_text, contacts, plan_cost_divided_equally):
     
     return filtered_df
 
-def render_pdf_viewer(pdf_file):
+# def render_pdf_viewer(pdf_file):
+#     """Function to render PDF in iframe"""
+#     pdf_base64 = base64.b64encode(pdf_file.read()).decode("utf-8")
+#     pdf_url = f"data:application/pdf;base64,{pdf_base64}"
+#     st.markdown(f'<iframe src="{pdf_url}" width="700" height="600" type="application/pdf"></iframe>', unsafe_allow_html=True)
+
+def render_pdf_viewer(pdf_bytes):
     """Function to render PDF in iframe"""
-    pdf_base64 = base64.b64encode(pdf_file.read()).decode("utf-8")
-    pdf_url = f"data:application/pdf;base64,{pdf_base64}"
-    st.markdown(f'<iframe src="{pdf_url}" width="700" height="600" type="application/pdf"></iframe>', unsafe_allow_html=True)
+    pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
+    pdf_display = f'<iframe src="data:application/pdf;base64,{pdf_base64}" width="700" height="600" type="application/pdf"></iframe>'
+    st.markdown(pdf_display, unsafe_allow_html=True)
 
 def main():
     st.set_page_config(page_title="T-Mobile Bill Splitter", layout="wide")
@@ -184,7 +191,7 @@ def main():
         
         if uploaded_file is not None:
             try:
-                render_pdf_viewer(uploaded_file)
+                render_pdf_viewer(uploaded_file.read())
                 full_text = extract_text(uploaded_file)
                 result_df = process_bill(full_text, contacts, plan_cost_divided_equally)
                 
