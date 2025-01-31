@@ -5,65 +5,17 @@ import re
 from io import StringIO
 import json
 import base64
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
 import os
-import pickle
 from pathlib import Path
+from streamlit_oauth import OAuth2Component
 
-
-# Configure OAuth 2.0 credentials
-GOOGLE_CLIENT_CONFIG = {
-    "web": {
-        "client_id": st.secrets["google"]["client_id"],
-        "client_secret": st.secrets["google"]["client_secret"],
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": [st.secrets["google"]["redirect_uri"]],
-        "javascript_origins": [st.secrets["google"]["redirect_uri"]]
-    }
-}
-
-def create_google_oauth_flow():
-    """Create and configure Google OAuth flow"""
-    flow = Flow.from_client_config(
-        GOOGLE_CLIENT_CONFIG,
-        scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email'],
-        redirect_uri=GOOGLE_CLIENT_CONFIG['web']['redirect_uris'][0]
-    )
-    return flow
-
-def get_google_credentials():
-    """Get or refresh Google credentials"""
-    if 'google_credentials' not in st.session_state:
-        return None
-    
-    credentials = Credentials(**st.session_state.google_credentials)
-    
-    if credentials and credentials.expired and credentials.refresh_token:
-        credentials.refresh(Request())
-        st.session_state.google_credentials = {
-            'token': credentials.token,
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
-        }
-    
-    return credentials
-
-def get_user_info(credentials):
-    """Get Google user information"""
-    try:
-        service = build('oauth2', 'v2', credentials=credentials)
-        user_info = service.userinfo().get().execute()
-        return user_info
-    except Exception as e:
-        st.error(f"Error fetching user info: {str(e)}")
-        return None
+# OAuth Configuration
+CLIENT_ID = st.secrets["google"]["client_id"]
+CLIENT_SECRET = st.secrets["google"]["client_secret"]
+AUTHORIZE_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
+REDIRECT_URI = st.secrets["google"]["redirect_uri"]
 
 def save_user_contacts(user_email, contacts):
     """Save contacts to a JSON file for the specific user"""
@@ -81,42 +33,6 @@ def load_user_contacts(user_email):
         with open(file_path, 'r') as f:
             return json.load(f)
     return {}
-
-def login_button():
-    """Display Google login button"""
-    if st.button("Sign in with Google"):
-        flow = create_google_oauth_flow()
-        authorization_url, state = flow.authorization_url(
-            access_type='online',
-            include_granted_scopes='true'
-        )
-        st.session_state.oauth_state = state
-        st.markdown(f'<a href="{authorization_url}" target="_self">Click here to complete Google sign-in</a>', 
-                   unsafe_allow_html=True)
-
-def handle_oauth_callback():
-    """Handle OAuth callback and save credentials"""
-    query_params = st.experimental_get_query_params()
-    if 'code' in query_params:
-        try:
-            flow = create_google_oauth_flow()
-            flow.fetch_token(code=query_params['code'][0])
-            
-            credentials = flow.credentials
-            st.session_state.google_credentials = {
-                'token': credentials.token,
-                'refresh_token': credentials.refresh_token,
-                'token_uri': credentials.token_uri,
-                'client_id': credentials.client_id,
-                'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes
-            }
-            
-            # Clear query parameters
-            st.experimental_set_query_params()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error during authentication: {str(e)}")
 
 def extract_text(uploaded_file):
     """Extracts data from an uploaded PDF"""
@@ -188,106 +104,119 @@ def render_pdf_viewer(pdf_file):
 
 def main():
     st.set_page_config(page_title="T-Mobile Bill Splitter", layout="wide")
-    
     st.title("T-Mobile Bill Splitter")
-    
-    # Handle OAuth callback
-    handle_oauth_callback()
-    
-    # Get credentials and user info
-    credentials = get_google_credentials()
-    user_info = None
-    if credentials:
-        user_info = get_user_info(credentials)
-    
-    # Initialize or load contacts based on authentication status
-    if user_info:
-        contacts = load_user_contacts(user_info['email'])
-        st.sidebar.success(f"Logged in as {user_info['email']}")
-        st.sidebar.button("Sign Out", on_click=lambda: st.session_state.clear())
-    else:
-        contacts = {}
-        login_button()
-    
-    # Sidebar for contacts management
-    with st.sidebar:
-        st.header("👥 Contact Management")
-        
-        # Add new contact
-        with st.form("add_contact"):
-            st.subheader("Add New Contact")
-            new_phone = st.text_input("Phone Number (e.g., (940) 218-8816)")
-            new_name = st.text_input("Name")
-            
-            if st.form_submit_button("Add Contact"):
-                if new_phone and new_name:
-                    contacts[new_phone] = new_name
-                    if user_info:
-                        save_user_contacts(user_info['email'], contacts)
-                    st.success(f"Added {new_name} with number {new_phone}")
-                else:
-                    st.warning("Please fill in both fields")
-        
-        # Display and manage existing contacts
-        st.subheader("Existing Contacts")
-        if contacts:
-            for phone, name in contacts.items():
-                col1, col2 = st.columns([3, 1])
-                col1.text(f"{name}: {phone}")
-                if col2.button("Delete", key=phone):
-                    del contacts[phone]
-                    if user_info:
-                        save_user_contacts(user_info['email'], contacts)
-                    st.rerun()
-        else:
-            st.info("No contacts added yet")
-    
-    # Main content area
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        uploaded_file = st.file_uploader("Upload T-Mobile PDF Bill", type="pdf")
-        plan_cost_divided_equally = st.checkbox("Split Plan Cost Equally", value=True)
-    
-    if uploaded_file is not None:
-        try:
-            # Render PDF viewer
-            render_pdf_viewer(uploaded_file)
 
-            full_text = extract_text(uploaded_file)
-            result_df = process_bill(full_text, contacts, plan_cost_divided_equally)
-            
-            if result_df is not None:
-                st.header("📊 Bill Summary")
-                
-                # Display results in a side-by-side layout
-                for _, row in result_df.iterrows():
-                    with st.container():
-                        cols = st.columns([3, 2, 1])  # Adjust columns for reduced gaps
-                        with cols[0]:
-                            st.subheader(row['Name'])
-                            st.text(row['Phone_number'])
-                        with cols[1]:
-                            st.metric("Amount Due", f"${row['total_amount']:.2f}")
-                
-                # Detailed view in an expander
-                with st.expander("View Detailed Breakdown"):
-                    st.dataframe(
-                        result_df[[
-                            'Name', 'Phone_number', 'Plan_Type', 'Plans_Cost',
-                            'Equipment', 'Services', 'One_time_charges', 'total_amount'
-                        ]].style.format({
-                            'Plans_Cost': '${:.2f}',
-                            'Equipment': '${:.2f}',
-                            'Services': '${:.2f}',
-                            'One_time_charges': '${:.2f}',
-                            'total_amount': '${:.2f}'
-                        })
-                    )
+    # Initialize OAuth2Component
+    oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_ENDPOINT, TOKEN_ENDPOINT, TOKEN_ENDPOINT, REVOKE_ENDPOINT)
+
+    # Check if user is authenticated
+    if 'auth' not in st.session_state:
+        # Show login button
+        result = oauth2.authorize_button(
+            name="Continue with Google",
+            icon="https://www.google.com.tw/favicon.ico",
+            redirect_uri=REDIRECT_URI,
+            scope="openid email profile",
+            key="google",
+            extras_params={"prompt": "consent", "access_type": "offline"},
+            use_container_width=True,
+            pkce='S256',
+        )
         
-        except Exception as e:
-            st.error(f"Error processing the bill: {str(e)}")
-            st.info("Please make sure you've uploaded a valid T-Mobile bill PDF")
+        if result:
+            # Handle authorization response
+            id_token = result["token"]["id_token"]
+            payload = id_token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            payload = json.loads(base64.b64decode(payload))
+            st.session_state["auth"] = payload["email"]
+            st.session_state["token"] = result["token"]
+            st.rerun()
+    else:
+        # User is logged in
+        user_email = st.session_state["auth"]
+        contacts = load_user_contacts(user_email)
+        
+        # Logout button
+        st.sidebar.success(f"Logged in as {user_email}")
+        if st.sidebar.button("Sign Out"):
+            del st.session_state["auth"]
+            del st.session_state["token"]
+            st.rerun()
+
+        # Contact management
+        with st.sidebar:
+            st.header("👥 Contact Management")
+            
+            # Add new contact
+            with st.form("add_contact"):
+                st.subheader("Add New Contact")
+                new_phone = st.text_input("Phone Number (e.g., (940) 218-8816)")
+                new_name = st.text_input("Name")
+                
+                if st.form_submit_button("Add Contact"):
+                    if new_phone and new_name:
+                        contacts[new_phone] = new_name
+                        save_user_contacts(user_email, contacts)
+                        st.success(f"Added {new_name} with number {new_phone}")
+                    else:
+                        st.warning("Please fill in both fields")
+            
+            # Display existing contacts
+            st.subheader("Existing Contacts")
+            if contacts:
+                for phone, name in contacts.items():
+                    col1, col2 = st.columns([3, 1])
+                    col1.text(f"{name}: {phone}")
+                    if col2.button("Delete", key=phone):
+                        del contacts[phone]
+                        save_user_contacts(user_email, contacts)
+                        st.rerun()
+            else:
+                st.info("No contacts added yet")
+
+        # Main content
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            uploaded_file = st.file_uploader("Upload T-Mobile PDF Bill", type="pdf")
+            plan_cost_divided_equally = st.checkbox("Split Plan Cost Equally", value=True)
+        
+        if uploaded_file is not None:
+            try:
+                render_pdf_viewer(uploaded_file)
+                full_text = extract_text(uploaded_file)
+                result_df = process_bill(full_text, contacts, plan_cost_divided_equally)
+                
+                if result_df is not None:
+                    st.header("📊 Bill Summary")
+                    
+                    for _, row in result_df.iterrows():
+                        with st.container():
+                            cols = st.columns([3, 2, 1])
+                            with cols[0]:
+                                st.subheader(row['Name'])
+                                st.text(row['Phone_number'])
+                            with cols[1]:
+                                st.metric("Amount Due", f"${row['total_amount']:.2f}")
+                    
+                    with st.expander("View Detailed Breakdown"):
+                        st.dataframe(
+                            result_df[[
+                                'Name', 'Phone_number', 'Plan_Type', 'Plans_Cost',
+                                'Equipment', 'Services', 'One_time_charges', 'total_amount'
+                            ]].style.format({
+                                'Plans_Cost': '${:.2f}',
+                                'Equipment': '${:.2f}',
+                                'Services': '${:.2f}',
+                                'One_time_charges': '${:.2f}',
+                                'total_amount': '${:.2f}'
+                            })
+                        )
+            
+            except Exception as e:
+                st.error(f"Error processing the bill: {str(e)}")
+                st.info("Please make sure you've uploaded a valid T-Mobile bill PDF")
 
 if __name__ == "__main__":
     main()
