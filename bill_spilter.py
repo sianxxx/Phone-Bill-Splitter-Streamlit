@@ -9,6 +9,7 @@ import base64
 import os
 from pathlib import Path
 from streamlit_oauth import OAuth2Component
+from streamlit_pdf_viewer import pdf_viewer
 
 # OAuth Configuration
 CLIENT_ID = st.secrets["google"]["client_id"]
@@ -105,9 +106,7 @@ def process_bill(full_text, contacts, plan_cost_divided_equally):
 
 def render_pdf_viewer(pdf_bytes):
     """Function to render PDF in iframe"""
-    pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
-    pdf_display = f'<iframe src="data:application/pdf;base64,{pdf_base64}" width="700" height="600" type="application/pdf"></iframe>'
-    st.markdown(pdf_display, unsafe_allow_html=True)
+    pdf_viewer(pdf_bytes, width=700)
 
 def main():
     st.set_page_config(page_title="T-Mobile Bill Splitter", layout="wide")
