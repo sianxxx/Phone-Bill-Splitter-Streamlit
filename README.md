@@ -4,6 +4,9 @@
 
 The **Phone Bill Splitter** is a Python application built with Streamlit that helps users split their phone bill among multiple users. This tool is especially useful for roommates, families, or any group of people sharing a phone plan who want to keep track of individual expenses. **Currently, it only supports T-Mobile carrier bills.**
 
+You can access the application [here](https://phonebillsplitter.streamlit.app/).
+
+
 ## Features
 
 - **User-Friendly Interface**: Streamlit provides an easy-to-use interface for entering and displaying data.
