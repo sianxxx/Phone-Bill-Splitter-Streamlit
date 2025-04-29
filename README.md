@@ -15,6 +15,9 @@ You can access the application [here](https://phonebillsplitter.streamlit.app/).
 - **PDF Bill Parsing**: Upload a PDF of your T-Mobile bill and the app will automatically extract the necessary information for splitting.
 - **Google Login**: Secure login using your Gmail account.
 
+**New Feature**
+- **Multi-month Bill Parsing**: Take more than one month bill and generate an aggregated bill split.
+
 ## Installation
 
 1. **Clone the repository**:
@@ -38,7 +41,7 @@ You can access the application [here](https://phonebillsplitter.streamlit.app/).
 
 1. **Run the Streamlit app**:
     ```sh
-    streamlit run app.py
+    streamlit run bill_spilter.py
     ```
 
 2. **Login Using Gmail**:
@@ -55,7 +58,7 @@ You can access the application [here](https://phonebillsplitter.streamlit.app/).
 
 ## File Structure
 
-- `app.py`: Main file to run the Streamlit application.
+- `bill_spilter.py`: Main file to run the Streamlit application.
 - `requirements.txt`: List of dependencies required for the project.
 - `README.md`: Project documentation.
 
