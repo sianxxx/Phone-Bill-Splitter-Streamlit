@@ -19,6 +19,16 @@ TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
 REDIRECT_URI = st.secrets["google"]["redirect_uri"]
 
+#sx added 1
+def format_phone_number(raw_phone):
+    # Remove all non-digits
+    digits = re.sub(r'\D', '', raw_phone)    
+    # Check if it has exactly 10 digits
+    if len(digits) == 10:
+        return f'({digits[0:3]}) {digits[3:6]}-{digits[6:10]}'
+    else:
+        return None  # or raise an error or return raw_phone
+
 def save_user_contacts(user_email, contacts):
     """Save contacts to a JSON file for the specific user"""
     contacts_dir = Path("user_contacts")
@@ -56,47 +66,117 @@ def filter_text(data, start_match, end_match):
         st.error("Could not find expected sections in the bill. Please check if this is a valid T-Mobile bill.")
         return None
 
+#sx added 2
+def get_bill_date(input_str):
+    filtered_input = filter_text(input_str, "Bill issue date Account Page", "THIS BILL SUMMARY")    
+    # Split the string into parts (by spaces)
+    parts = filtered_input.split(' ')   
+    # Join the first three parts to get the substring before the 3rd space
+    result = ' '.join(parts[:3])
+    return result
+    
 def clean_and_convert(value):
     if isinstance(value, str) and value.strip() in ["Included", "-"]:
         return 0.0
     return float(value.replace("$", "").replace(",", "")) if isinstance(value, str) else value
 
+#sx added 3      
+def filtered_text_to_df(filtered_text):
+
+    filtered_text = filtered_text.replace('One-time charges','One-time-charges')   
+    
+    # Step 1: Read line by line
+    lines = filtered_text.strip().split('\n')   
+    
+    # Step 2: First line is header
+    header = lines[0].split()    
+    
+    # Step 3: Process the rest
+    data = []
+    for line in lines[1:]:
+        parts = line.split()
+        
+        if parts[0].startswith('('):  # If line starts with a phone number
+            line_field = parts[0] + ' ' + parts[1]  # (xxx) xxx-xxxx
+            parts_edited = [line_field]+parts[2:]
+        else:  # Totals, Account lines
+            parts_edited = [parts[0]]+[None]+parts[1:]
+        
+        data.append(parts_edited)
+    
+    # Step 4: Build DataFrame
+    df = pd.DataFrame(data, columns=header)
+
+    return df
+
+#sx edited 1
 def process_bill(full_text, contacts, plan_cost_divided_equally):
     filtered_text = filter_text(full_text, "THIS BILL SUMMARY", "DETAILED CHARGES")
+    billdate = get_bill_date(full_text)
+    
     if filtered_text is None:
         return None
-    
-    df = pd.read_csv(StringIO(filtered_text), delim_whitespace=True)
-    total_plan_cost = df.loc[df['Line'] == "Totals", "Type"].iloc[0].strip("$")
+
+    df = filtered_text_to_df(filtered_text)
+    total_plan_cost = df.loc[df['Line'] == "Totals", "Plans"].iloc[0].strip("$")
+    total_equip_cost = df.loc[df['Line'] == "Totals", "Equipment"].iloc[0].strip("$")
+    total_service_cost = df.loc[df['Line'] == "Totals", "Services"].iloc[0].strip("$")
+    total = df.loc[df['Line'] == "Totals", "Total"].iloc[0].strip("$")
     
     regex_pattern = r"\(\d{3}\)"
     filtered_df = df[df['Line'].str.contains(regex_pattern, regex=True)].copy()
     
-    filtered_df["Phone_number"] = filtered_df["Line"] + " " + filtered_df["Type"]
-    filtered_df = filtered_df.drop(columns=["Line", "Type", "Total"])
-    
     new_column_names = {
-        "Plans": "Plan_Type",
-        "Equipment": "Plans_Cost",
-        "Services": "Equipment",
-        "One-time": "Services",
-        "charges": "One_time_charges",
-    }
+            "Line": "Phone_number",
+            "Plans": "Plans_Cost",
+            "Type": "Plan_Type"
+        }
     filtered_df = filtered_df.rename(columns=new_column_names)
-    
-    for col in ["Plans_Cost", "Equipment", "Services", "One_time_charges"]:
+
+    if 'One-time-charges' not in filtered_df.columns:
+        filtered_df['One-time-charges'] = 0
+        total_onetimecharge = 0
+    else:
+        total_onetimecharge = df.loc[df['Line'] == "Totals", "One-time-charges"].iloc[0].strip("$")
+        
+    for col in ["Plans_Cost", "Equipment", "Services", "One-time-charges","Total"]:
         filtered_df[col] = filtered_df[col].apply(clean_and_convert)
     
+    filtered_df["Phone_number"] = filtered_df["Phone_number"].apply(format_phone_number)
+     
     if plan_cost_divided_equally:
-        filtered_df["equal_plan_cost"] = float(total_plan_cost)/len(filtered_df)
-        filtered_df["total_amount"] = filtered_df["equal_plan_cost"] + filtered_df["Equipment"] + filtered_df["Services"] + filtered_df["One_time_charges"]
-    else:
-        filtered_df["total_amount"] = filtered_df["Plans_Cost"] + filtered_df["Equipment"] + filtered_df["Services"] + filtered_df["One_time_charges"]
-    
+        filtered_df["Plans_Cost"] = float(total_plan_cost)/len(filtered_df)
+
+    filtered_df["Services"] = float(total_service_cost)/len(filtered_df)
+    filtered_df["total_amount"] = filtered_df["Plans_Cost"] + filtered_df["Equipment"] + filtered_df["Services"]   
     filtered_df["Name"] = filtered_df["Phone_number"].map(contacts)
     filtered_df["Name"] = filtered_df["Name"].fillna("Unknown")
+
+    filtered_df = filtered_df[['Name', 'Phone_number', 'Plan_Type', 'Plans_Cost','Equipment', 'Services', 'One-time-charges','total_amount']]
     
-    return filtered_df
+    filtered_df = filtered_df.sort_values(by = 'Name')
+    filtered_df.reset_index(drop=True,inplace = True)
+    
+    filtered_df.loc[len(filtered_df)] = ['Total','', '',
+                                         float(total_plan_cost),float(total_equip_cost),float(total_service_cost),float(total_onetimecharge),
+                                         float(total)]
+
+    return filtered_df,float(total),billdate
+
+#sx added 4
+def agg_months(result_df_main):
+    result_df_agg = result_df_main.groupby(['Name','Phone_number','Plan_Type']).sum()
+    result_df_agg = result_df_agg.reset_index()
+    result_df_agg.loc[len(result_df_agg)] = ['Total',
+                                             '', 
+                                             '',
+                                             sum(result_df_agg.Plans_Cost),
+                                             sum(result_df_agg.Equipment),
+                                             sum(result_df_agg.Services),
+                                             sum(result_df_agg['One-time-charges']),
+                                             sum(result_df_agg.total_amount)]
+
+    return result_df_agg
 
 # def render_pdf_viewer(pdf_file):
 #     """Function to render PDF in iframe"""
@@ -185,44 +265,67 @@ def main():
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            uploaded_file = st.file_uploader("Upload T-Mobile PDF Bill", type="pdf")
+            uploaded_files = st.file_uploader("Upload T-Mobile PDF Bill", type="pdf", accept_multiple_files=True)
             plan_cost_divided_equally = st.checkbox("Split Plan Cost Equally", value=True)
         
-        if uploaded_file is not None:
-            try:
-                render_pdf_viewer(uploaded_file.read())
-                full_text = extract_text(uploaded_file)
-                result_df = process_bill(full_text, contacts, plan_cost_divided_equally)
-                
-                if result_df is not None:
-                    st.header("📊 Bill Summary")
-                    
-                    for _, row in result_df.iterrows():
-                        with st.container():
-                            cols = st.columns([3, 2, 1])
-                            with cols[0]:
-                                st.subheader(row['Name'])
-                                st.text(row['Phone_number'])
-                            with cols[1]:
-                                st.metric("Amount Due", f"${row['total_amount']:.2f}")
-                    
-                    with st.expander("View Detailed Breakdown"):
-                        st.dataframe(
-                            result_df[[
-                                'Name', 'Phone_number', 'Plan_Type', 'Plans_Cost',
-                                'Equipment', 'Services', 'One_time_charges', 'total_amount'
-                            ]].style.format({
-                                'Plans_Cost': '${:.2f}',
-                                'Equipment': '${:.2f}',
-                                'Services': '${:.2f}',
-                                'One_time_charges': '${:.2f}',
-                                'total_amount': '${:.2f}'
-                            })
-                        )
+        if uploaded_files is not None and len(uploaded_files) > 0:
+            st.header("📊 Monthly Record")
+            result_df_main = pd.DataFrame()
             
-            except Exception as e:
-                st.error(f"Error processing the bill: {str(e)}")
-                st.info("Please make sure you've uploaded a valid T-Mobile bill PDF")
+            for uploaded_file in uploaded_files:
+                try:
+                    
+                    # render_pdf_viewer(uploaded_file.read())
+                    full_text = extract_text(uploaded_file)
+                    result_df,total,billdate = process_bill(full_text, contacts, plan_cost_divided_equally)
+                    st.info(f"{billdate} - Total ${result_df.iloc[-1,-1]}")
+                    if abs(result_df.iloc[-1,-1]-total)>=0.01:
+                        st.warning(f"Possible error parsing data, please check details. Calculated Total = ${result_df.iloc[-1,-1]}; Crawl Total = ${total}")
+    
+                    if result_df is not None:
+                        result_df_main = pd.concat([result_df_main,result_df.iloc[:-1,:]], ignore_index=True)
+                        
+                        with st.expander(f"View Detailed Breakdown from {uploaded_file.name}"):
+                            st.dataframe(
+                                result_df.style.format({
+                                    'Plans_Cost': '${:.2f}',
+                                    'Equipment': '${:.2f}',
+                                    'Services': '${:.2f}',
+                                    'One-time-charges': '${:.2f}',
+                                    'total_amount': '${:.2f}'
+                                })
+                            )
+
+            
+                except Exception as e:
+                    st.error(f"Error processing the bill: {str(e)}")
+                    st.info("Please make sure you've uploaded a valid T-Mobile bill PDF")
+
+            
+            if result_df_main.shape[0]>0:
+                result_df_agg = agg_months(result_df_main)
+                st.header("📊 All Bill Summary")
+
+                for _, row in result_df_agg.iterrows():
+                    with st.container():
+                        cols = st.columns([3, 2, 1])
+                        with cols[0]:
+                            st.subheader(row['Name'])
+                            st.text(row['Phone_number'])
+                        with cols[1]:
+                            st.metric("Amount Due", f"${row['total_amount']:.2f}")
+        
+                with st.expander("View Detailed Breakdown for all bills uploaded"):
+                    st.dataframe(
+                        result_df_agg.style.format({
+                            'Plans_Cost': '${:.2f}',
+                            'Equipment': '${:.2f}',
+                            'Services': '${:.2f}',
+                            'One-time-charges': '${:.2f}',
+                            'total_amount': '${:.2f}'
+                        })
+                    )
+                        
 
 if __name__ == "__main__":
     main()
